@@ -4,6 +4,12 @@ uint32 axis_requested_state
 
 ---
 
+# True if the request completed without timeout and was accepted by the enable latch.
+bool success
+
+# True if the service returned because request_axis_state_timeout_s elapsed.
+bool timed_out
+
 # Bitfield of active errors at the time the service returns.
 # See https://docs.odriverobotics.com/v/latest/fibre_types/com_odriverobotics_ODrive.html#ODrive.Axis.active_errors
 uint32 active_errors

@@ -8,3 +8,5 @@ uint32 active_errors
 uint8 axis_state
 uint8 procedure_result
 bool trajectory_done_flag
+# False when the enable latch has disabled this motor (control ignored; closed-loop blocked).
+bool enabled

@@ -1,0 +1,17 @@
+# Default parameters for custom_odrive_node.
+# Launch files load this first, then pass a dict of overrides.
+#
+# Required (no defaults here — must be set in the launch Node parameters):
+#   node_id: <int>       # ODrive CAN node ID
+#   interface: <string>  # SocketCAN interface name (e.g. can0)
+#
+# Also set on the Node in launch (not a ROS parameter):
+#   namespace: <string>  # ROS namespace for this motor's topics/services
+
+/**:
+  ros__parameters:
+    axis_idle_on_shutdown: true          # send IDLE on node shutdown
+    control_message_in_radians: true     # pos/vel as rad (and rad/s), not turns
+    invert_direction: false              # flip command and feedback sign
+    request_axis_state_timeout_s: 5.0    # max wait for request_axis_state (s)
+    start_enabled: true                  # initial enable-latch state

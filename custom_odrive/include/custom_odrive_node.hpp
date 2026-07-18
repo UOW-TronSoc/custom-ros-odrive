@@ -8,10 +8,13 @@
 #include "custom_odrive/msg/control_message.hpp"
 #include "custom_odrive/srv/axis_state.hpp"
 #include "std_srvs/srv/empty.hpp"
+#include "std_srvs/srv/set_bool.hpp"
 #include "socket_can.hpp"
 
-#include <mutex>
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <mutex>
 #include <linux/can.h>
 #include <linux/can/raw.h>
 
@@ -24,6 +27,7 @@ using ControlMessage = custom_odrive::msg::ControlMessage;
 
 using AxisState = custom_odrive::srv::AxisState;
 using Empty = std_srvs::srv::Empty;
+using SetBool = std_srvs::srv::SetBool;
 
 class CustomODriveNode : public rclcpp::Node {
 public:
@@ -38,16 +42,20 @@ private:
                         std::shared_ptr<AxisState::Response> response);
   void service_clear_errors_callback(const std::shared_ptr<Empty::Request> request,
                                      std::shared_ptr<Empty::Response> response);
+  void service_set_enabled_callback(const std::shared_ptr<SetBool::Request> request,
+                                    std::shared_ptr<SetBool::Response> response);
   void request_state_callback();
   void request_clear_errors_callback();
   void ctrl_msg_callback();
   void publish_controller_status();
+  void fill_axis_state_response(std::shared_ptr<AxisState::Response> response, bool success, bool timed_out);
   inline bool verify_length(const std::string& name, uint8_t expected, uint8_t length);
 
   uint16_t node_id_;
   bool axis_idle_on_shutdown_;
   bool control_message_in_radians_{false};
   bool invert_direction_{false};
+  double request_axis_state_timeout_s_{5.0};
   SocketCanIntf can_intf_ = SocketCanIntf();
 
   short int ctrl_pub_flag_ = 0;
@@ -76,6 +84,9 @@ private:
 
   EpollEvent srv_clear_errors_evt_;
   rclcpp::Service<Empty>::SharedPtr service_clear_errors_;
+
+  std::atomic<bool> enabled_{true};
+  rclcpp::Service<SetBool>::SharedPtr service_set_enabled_;
 };
 
 #endif  // CUSTOM_ODRIVE_NODE_HPP

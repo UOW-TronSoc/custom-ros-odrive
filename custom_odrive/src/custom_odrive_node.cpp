@@ -7,7 +7,7 @@
 
 namespace {
 constexpr float kTwoPi = 6.28318530717958647692F;
-}
+}  // namespace
 
 enum CmdId : uint32_t {
   kHeartbeat = 0x001,
@@ -35,9 +35,11 @@ enum ControlMode : uint64_t {
 CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(node_name) {
   rclcpp::Node::declare_parameter<std::string>("interface", "can0");
   rclcpp::Node::declare_parameter<uint16_t>("node_id", 0);
-  rclcpp::Node::declare_parameter<bool>("axis_idle_on_shutdown", false);
-  rclcpp::Node::declare_parameter<bool>("control_message_in_radians", false);
+  rclcpp::Node::declare_parameter<bool>("axis_idle_on_shutdown", true);
+  rclcpp::Node::declare_parameter<bool>("control_message_in_radians", true);
   rclcpp::Node::declare_parameter<bool>("invert_direction", false);
+  rclcpp::Node::declare_parameter<double>("request_axis_state_timeout_s", 5.0);
+  rclcpp::Node::declare_parameter<bool>("start_enabled", true);
 
   rclcpp::QoS ctrl_stat_qos(rclcpp::KeepLast(10));
   ctrl_stat_qos.best_effort();
@@ -63,6 +65,8 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
       "request_axis_state", std::bind(&CustomODriveNode::service_callback, this, _1, _2), srv_qos_profile);
   service_clear_errors_ = rclcpp::Node::create_service<Empty>(
       "clear_errors", std::bind(&CustomODriveNode::service_clear_errors_callback, this, _1, _2), srv_qos_profile);
+  service_set_enabled_ = rclcpp::Node::create_service<SetBool>(
+      "set_enabled", std::bind(&CustomODriveNode::service_set_enabled_callback, this, _1, _2), srv_qos_profile);
 }
 
 void CustomODriveNode::deinit() {
@@ -85,7 +89,16 @@ bool CustomODriveNode::init(EpollEventLoop* event_loop) {
   axis_idle_on_shutdown_ = rclcpp::Node::get_parameter("axis_idle_on_shutdown").as_bool();
   control_message_in_radians_ = rclcpp::Node::get_parameter("control_message_in_radians").as_bool();
   invert_direction_ = rclcpp::Node::get_parameter("invert_direction").as_bool();
+  request_axis_state_timeout_s_ = rclcpp::Node::get_parameter("request_axis_state_timeout_s").as_double();
+  enabled_.store(rclcpp::Node::get_parameter("start_enabled").as_bool());
   std::string interface = rclcpp::Node::get_parameter("interface").as_string();
+
+  if (request_axis_state_timeout_s_ < 1.0) {
+    RCLCPP_WARN(rclcpp::Node::get_logger(),
+                "request_axis_state_timeout_s (%.3f) is below the 1s minimum wait; clamping to 1.0",
+                request_axis_state_timeout_s_);
+    request_axis_state_timeout_s_ = 1.0;
+  }
 
   if (!can_intf_.init(interface, event_loop, std::bind(&CustomODriveNode::recv_callback, this, _1))) {
     RCLCPP_ERROR(rclcpp::Node::get_logger(), "Failed to initialize socket can interface: %s", interface.c_str());
@@ -109,7 +122,18 @@ bool CustomODriveNode::init(EpollEventLoop* event_loop) {
   RCLCPP_INFO(rclcpp::Node::get_logger(), "control_message_in_radians: %s",
               control_message_in_radians_ ? "true" : "false");
   RCLCPP_INFO(rclcpp::Node::get_logger(), "invert_direction: %s", invert_direction_ ? "true" : "false");
+  RCLCPP_INFO(rclcpp::Node::get_logger(), "request_axis_state_timeout_s: %.3f", request_axis_state_timeout_s_);
+  RCLCPP_INFO(rclcpp::Node::get_logger(), "start_enabled: %s", enabled_.load() ? "true" : "false");
   return true;
+}
+
+void CustomODriveNode::fill_axis_state_response(std::shared_ptr<AxisState::Response> response, bool success,
+                                               bool timed_out) {
+  response->success = success;
+  response->timed_out = timed_out;
+  response->axis_state = ctrl_stat_.axis_state;
+  response->active_errors = ctrl_stat_.active_errors;
+  response->procedure_result = ctrl_stat_.procedure_result;
 }
 
 void CustomODriveNode::publish_controller_status() {
@@ -120,6 +144,7 @@ void CustomODriveNode::publish_controller_status() {
   msg.vel_estimate *= sign;
   msg.torque_target *= sign;
   msg.torque_estimate *= sign;
+  msg.enabled = enabled_.load();
 
   if (control_message_in_radians_) {
     msg.pos_estimate *= kTwoPi;
@@ -206,7 +231,6 @@ void CustomODriveNode::recv_callback(const can_frame& frame) {
     }
   }
 
-  // Full set, encoder-only, or heartbeat+encoder
   if (ctrl_pub_flag_ == 0b1111 || ctrl_pub_flag_ == 0b0010 || ctrl_pub_flag_ == 0b0011) {
     std::lock_guard<std::mutex> guard(ctrl_stat_mutex_);
     publish_controller_status();
@@ -220,6 +244,9 @@ void CustomODriveNode::recv_callback(const can_frame& frame) {
 }
 
 void CustomODriveNode::subscriber_callback(const ControlMessage::SharedPtr msg) {
+  if (!enabled_.load()) {
+    return;
+  }
   std::lock_guard<std::mutex> guard(ctrl_msg_mutex_);
   ctrl_msg_ = *msg;
   sub_evt_.set();
@@ -227,6 +254,17 @@ void CustomODriveNode::subscriber_callback(const ControlMessage::SharedPtr msg) 
 
 void CustomODriveNode::service_callback(const std::shared_ptr<AxisState::Request> request,
                                         std::shared_ptr<AxisState::Response> response) {
+  const bool requesting_idle = request->axis_requested_state == ODriveAxisState::AXIS_STATE_IDLE;
+
+  if (!enabled_.load() && !requesting_idle) {
+    RCLCPP_WARN(rclcpp::Node::get_logger(),
+                "rejecting axis state %u: motor is disabled (call set_enabled with data:=true)",
+                request->axis_requested_state);
+    std::lock_guard<std::mutex> guard(ctrl_stat_mutex_);
+    fill_axis_state_response(response, false, false);
+    return;
+  }
+
   {
     std::unique_lock<std::mutex> guard(axis_state_mutex_);
     axis_state_ = request->axis_requested_state;
@@ -236,7 +274,9 @@ void CustomODriveNode::service_callback(const std::shared_ptr<AxisState::Request
 
   std::unique_lock<std::mutex> guard(ctrl_stat_mutex_);
   auto call_time = std::chrono::steady_clock::now();
-  fresh_heartbeat_.wait(guard, [this, &call_time, &request]() {
+  const auto timeout = std::chrono::duration<double>(request_axis_state_timeout_s_);
+
+  const bool completed = fresh_heartbeat_.wait_for(guard, timeout, [this, &call_time, &request]() {
     bool is_busy = this->ctrl_stat_.procedure_result == ODriveProcedureResult::PROCEDURE_RESULT_BUSY;
     bool requested_closed_loop =
         request->axis_requested_state == ODriveAxisState::AXIS_STATE_CLOSED_LOOP_CONTROL;
@@ -245,15 +285,42 @@ void CustomODriveNode::service_callback(const std::shared_ptr<AxisState::Request
     return complete;
   });
 
-  response->axis_state = ctrl_stat_.axis_state;
-  response->active_errors = ctrl_stat_.active_errors;
-  response->procedure_result = ctrl_stat_.procedure_result;
+  if (!completed) {
+    RCLCPP_ERROR(rclcpp::Node::get_logger(),
+                 "request_axis_state timed out after %.3f s (no completing heartbeat/procedure)",
+                 request_axis_state_timeout_s_);
+    fill_axis_state_response(response, false, true);
+    return;
+  }
+
+  fill_axis_state_response(response, true, false);
 }
 
 void CustomODriveNode::service_clear_errors_callback(const std::shared_ptr<Empty::Request> /*request*/,
                                                      std::shared_ptr<Empty::Response> /*response*/) {
   RCLCPP_INFO(rclcpp::Node::get_logger(), "clearing errors");
   srv_clear_errors_evt_.set();
+}
+
+void CustomODriveNode::service_set_enabled_callback(const std::shared_ptr<SetBool::Request> request,
+                                                    std::shared_ptr<SetBool::Response> response) {
+  if (request->data) {
+    enabled_.store(true);
+    response->success = true;
+    response->message = "motor enabled";
+    RCLCPP_INFO(rclcpp::Node::get_logger(), "motor enabled");
+    return;
+  }
+
+  enabled_.store(false);
+  {
+    std::unique_lock<std::mutex> guard(axis_state_mutex_);
+    axis_state_ = ODriveAxisState::AXIS_STATE_IDLE;
+  }
+  srv_evt_.set();
+  response->success = true;
+  response->message = "motor disabled; IDLE requested";
+  RCLCPP_WARN(rclcpp::Node::get_logger(), "motor disabled; control ignored until set_enabled(true)");
 }
 
 void CustomODriveNode::request_state_callback() {
@@ -287,6 +354,10 @@ void CustomODriveNode::request_clear_errors_callback() {
 }
 
 void CustomODriveNode::ctrl_msg_callback() {
+  if (!enabled_.load()) {
+    return;
+  }
+
   ControlMessage ctrl_msg;
   {
     std::lock_guard<std::mutex> guard(ctrl_msg_mutex_);

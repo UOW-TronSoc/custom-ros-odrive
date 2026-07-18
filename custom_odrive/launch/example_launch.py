@@ -1,11 +1,41 @@
+"""Example: launch a single custom_odrive_node.
+
+Loads shared defaults from config/custom_odrive_defaults.yaml, then sets the
+required per-motor fields (namespace, node_id, interface). Add optional
+parameter overrides in the dict only when they differ from the defaults.
+"""
+
 import os
-import sys
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from motor_launch_utils import motor_nodes_from_config  # noqa: E402
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    return LaunchDescription(motor_nodes_from_config("example_single.yaml"))
+    defaults = os.path.join(
+        get_package_share_directory("custom_odrive"),
+        "config",
+        "custom_odrive_defaults.yaml",
+    )
+
+    return LaunchDescription(
+        [
+            Node(
+                package="custom_odrive",
+                executable="custom_odrive_node",
+                name="can_node",
+                namespace="odrive_axis0",
+                parameters=[
+                    defaults,
+                    {
+                        # Required (no defaults in config)
+                        "node_id": 0,
+                        "interface": "can0",
+                        # Optional overrides of custom_odrive_defaults.yaml go here
+                    },
+                ],
+                output="screen",
+            ),
+        ]
+    )

@@ -1,11 +1,54 @@
+"""Example: launch multiple custom_odrive_node instances on one CAN bus.
+
+Same pattern as example_launch.py (defaults YAML + required/override dict), with
+one Node block per motor. Copy a block to add another axis; only put required
+fields and overrides in each dict.
+"""
+
 import os
-import sys
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-
-sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from motor_launch_utils import motor_nodes_from_config  # noqa: E402
+from launch_ros.actions import Node
 
 
 def generate_launch_description():
-    return LaunchDescription(motor_nodes_from_config("example_multi.yaml"))
+    defaults = os.path.join(
+        get_package_share_directory("custom_odrive"),
+        "config",
+        "custom_odrive_defaults.yaml",
+    )
+
+    return LaunchDescription(
+        [
+            Node(
+                package="custom_odrive",
+                executable="custom_odrive_node",
+                name="can_node",
+                namespace="odrive_axis0",
+                parameters=[
+                    defaults,
+                    {
+                        "node_id": 0,
+                        "interface": "can0",
+                    },
+                ],
+                output="screen",
+            ),
+            Node(
+                package="custom_odrive",
+                executable="custom_odrive_node",
+                name="can_node",
+                namespace="odrive_axis1",
+                parameters=[
+                    defaults,
+                    {
+                        "node_id": 1,
+                        "interface": "can0",
+                        "invert_direction": True,
+                    },
+                ],
+                output="screen",
+            ),
+        ]
+    )
