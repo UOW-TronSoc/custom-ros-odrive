@@ -1,0 +1,13 @@
+motors:
+  - namespace: odrive_axis0
+    node_id: 0
+    interface: can0
+    axis_idle_on_shutdown: false
+    control_message_in_radians: false
+    invert_direction: false
+  - namespace: odrive_axis1
+    node_id: 1
+    interface: can0
+    axis_idle_on_shutdown: false
+    control_message_in_radians: false
+    invert_direction: true

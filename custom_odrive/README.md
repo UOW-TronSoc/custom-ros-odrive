@@ -29,10 +29,16 @@ Derived from the upstream [`odrive_node`](https://github.com/odriverobotics/ros_
 * `request_axis_state` (`custom_odrive/srv/AxisState`): request an axis state transition
 * `clear_errors` (`std_srvs/srv/Empty`): clear errors without changing axis state
 
-## Example
+## Examples
+
+Motor parameters live under `config/`:
+
+* `config/example_single.yaml` — one motor
+* `config/example_multi.yaml` — two motors on one bus
 
 ```bash
-ros2 launch custom_odrive example_launch.yaml
+ros2 launch custom_odrive example_launch.py
+ros2 launch custom_odrive example_multi_launch.py
 ```
 
 For firmware cyclic-message setup, see the ODrive [ROS CAN Package Guide](https://docs.odriverobotics.com/v/latest/guides/ros-package.html).
