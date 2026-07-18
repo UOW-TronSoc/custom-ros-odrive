@@ -1,0 +1,31 @@
+custom-ros-odrive
+=================
+
+This repository is a modified derivative of the ODrive Robotics ROS 2 packages.
+
+Upstream project
+----------------
+Name:    ros_odrive
+Source:  https://github.com/odriverobotics/ros_odrive
+License: MIT
+Copyright (c) 2023 ODrive Robotics
+
+The original MIT license text is preserved in LICENSE. Under the MIT License,
+you may use, modify, and redistribute this software provided that the original
+copyright notice and permission notice are retained in all copies or substantial
+portions of the Software.
+
+This project
+------------
+Name:    custom-ros-odrive
+License: MIT
+Copyright (c) 2026 UOW TronSoc and contributors
+
+Modifications and extensions in this repository are likewise licensed under the
+MIT License. See LICENSE for the full terms.
+
+Relationship to ODrive Robotics
+-------------------------------
+This project is not affiliated with, endorsed by, or sponsored by ODrive
+Robotics. "ODrive" is used only to identify compatibility with ODrive hardware
+and to credit the upstream project.
