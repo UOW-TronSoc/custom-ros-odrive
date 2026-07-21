@@ -25,12 +25,12 @@ def generate_launch_description():
                 package="custom_odrive",
                 executable="custom_odrive_node",
                 name="can_node",
-                namespace="odrive_axis0",
+                namespace="wheel_bl",
                 parameters=[
                     defaults,
                     {
                         # Required (no defaults in config)
-                        "node_id": 0,
+                        "node_id": 3,
                         "interface": "can0",
                         # Optional overrides of custom_odrive_defaults.yaml go here
                     },

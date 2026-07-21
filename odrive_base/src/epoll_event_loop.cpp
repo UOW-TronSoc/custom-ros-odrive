@@ -2,10 +2,19 @@
 
 EpollEventLoop::EpollEventLoop() {
     epollfd = epoll_create1(0);
+    stop_fd_ = eventfd(0, 0);
+    // Registered purely so a stop request can wake a blocked epoll_wait().
+    register_event(nullptr, stop_fd_, EPOLLIN, [this](uint32_t) {
+        uint64_t val;
+        if (read(stop_fd_, &val, sizeof(val)) != sizeof(val)) {
+            std::cerr << "Failed to read stop eventfd" << std::endl;
+        }
+    });
 }
 
 EpollEventLoop::~EpollEventLoop() {
     close(epollfd);
+    if (stop_fd_ >= 0) close(stop_fd_);
 }
 
 bool EpollEventLoop::register_event(EvtId* p_evt, int fd, uint32_t events, const Callback& callback) {
@@ -30,19 +39,28 @@ bool EpollEventLoop::deregister_event(EvtId evt) {
     if (epoll_ctl(epollfd, EPOLL_CTL_DEL, evt->fd, nullptr) == -1) return false;
     drop_event(evt);
     delete evt;
+    n_events_--;
     return true;
 }
 
 bool EpollEventLoop::run_until_empty() {
-    while (n_events_) {
+    while (n_events_ && !stop_requested_.load()) {
         n_triggered_events_ = epoll_wait(epollfd, triggered_events_, kMaxEventsPerIteration, -1);
         if (n_triggered_events_ == -1) return false;
         for (int i = 0; i < n_triggered_events_; ++i) {
             EventContext* handler = static_cast<EventContext*>(triggered_events_[i].data.ptr);
-            handler->callback(triggered_events_[i].events);
+            if (handler) handler->callback(triggered_events_[i].events);
         }
     }
     return true;
+}
+
+void EpollEventLoop::request_stop() {
+    stop_requested_.store(true);
+    const uint64_t val = 1;
+    if (write(stop_fd_, &val, sizeof(val)) != sizeof(val)) {
+        std::cerr << "Failed to write stop eventfd" << std::endl;
+    }
 }
 
 void EpollEventLoop::drop_event(EvtId evt) {

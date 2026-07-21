@@ -47,12 +47,14 @@ private:
   void request_state_callback();
   void request_clear_errors_callback();
   void ctrl_msg_callback();
+  void send_axis_idle();
   void publish_controller_status();
   void fill_axis_state_response(std::shared_ptr<AxisState::Response> response, bool success, bool timed_out);
   inline bool verify_length(const std::string& name, uint8_t expected, uint8_t length);
 
   uint16_t node_id_;
   bool axis_idle_on_shutdown_;
+  bool axis_idle_on_startup_{true};
   bool control_message_in_radians_{false};
   bool invert_direction_{false};
   double request_axis_state_timeout_s_{5.0};

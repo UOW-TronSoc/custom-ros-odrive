@@ -11,6 +11,7 @@
 /**:
   ros__parameters:
     axis_idle_on_shutdown: true          # send IDLE on node shutdown
+    axis_idle_on_startup: true           # send IDLE on node startup (safe known state)
     control_message_in_radians: true     # pos/vel as rad (and rad/s), not turns
     invert_direction: false              # flip command and feedback sign
     request_axis_state_timeout_s: 5.0    # max wait for request_axis_state (s)

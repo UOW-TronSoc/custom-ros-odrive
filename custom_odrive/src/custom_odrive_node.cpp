@@ -36,6 +36,7 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
   rclcpp::Node::declare_parameter<std::string>("interface", "can0");
   rclcpp::Node::declare_parameter<uint16_t>("node_id", 0);
   rclcpp::Node::declare_parameter<bool>("axis_idle_on_shutdown", true);
+  rclcpp::Node::declare_parameter<bool>("axis_idle_on_startup", true);
   rclcpp::Node::declare_parameter<bool>("control_message_in_radians", true);
   rclcpp::Node::declare_parameter<bool>("invert_direction", false);
   rclcpp::Node::declare_parameter<double>("request_axis_state_timeout_s", 5.0);
@@ -69,13 +70,17 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
       "set_enabled", std::bind(&CustomODriveNode::service_set_enabled_callback, this, _1, _2), srv_qos_profile);
 }
 
+void CustomODriveNode::send_axis_idle() {
+  struct can_frame frame = {};
+  frame.can_id = node_id_ << 5 | CmdId::kSetAxisState;
+  write_le<uint32_t>(ODriveAxisState::AXIS_STATE_IDLE, frame.data);
+  frame.can_dlc = 4;
+  can_intf_.send_can_frame(frame);
+}
+
 void CustomODriveNode::deinit() {
   if (axis_idle_on_shutdown_) {
-    struct can_frame frame = {};
-    frame.can_id = node_id_ << 5 | CmdId::kSetAxisState;
-    write_le<uint32_t>(ODriveAxisState::AXIS_STATE_IDLE, frame.data);
-    frame.can_dlc = 4;
-    can_intf_.send_can_frame(frame);
+    send_axis_idle();
   }
 
   sub_evt_.deinit();
@@ -87,6 +92,7 @@ void CustomODriveNode::deinit() {
 bool CustomODriveNode::init(EpollEventLoop* event_loop) {
   node_id_ = rclcpp::Node::get_parameter("node_id").as_int();
   axis_idle_on_shutdown_ = rclcpp::Node::get_parameter("axis_idle_on_shutdown").as_bool();
+  axis_idle_on_startup_ = rclcpp::Node::get_parameter("axis_idle_on_startup").as_bool();
   control_message_in_radians_ = rclcpp::Node::get_parameter("control_message_in_radians").as_bool();
   invert_direction_ = rclcpp::Node::get_parameter("invert_direction").as_bool();
   request_axis_state_timeout_s_ = rclcpp::Node::get_parameter("request_axis_state_timeout_s").as_double();
@@ -124,6 +130,13 @@ bool CustomODriveNode::init(EpollEventLoop* event_loop) {
   RCLCPP_INFO(rclcpp::Node::get_logger(), "invert_direction: %s", invert_direction_ ? "true" : "false");
   RCLCPP_INFO(rclcpp::Node::get_logger(), "request_axis_state_timeout_s: %.3f", request_axis_state_timeout_s_);
   RCLCPP_INFO(rclcpp::Node::get_logger(), "start_enabled: %s", enabled_.load() ? "true" : "false");
+  RCLCPP_INFO(rclcpp::Node::get_logger(), "axis_idle_on_startup: %s", axis_idle_on_startup_ ? "true" : "false");
+
+  if (axis_idle_on_startup_) {
+    RCLCPP_INFO(rclcpp::Node::get_logger(), "requesting IDLE on startup");
+    send_axis_idle();
+  }
+
   return true;
 }
 
@@ -416,8 +429,8 @@ void CustomODriveNode::ctrl_msg_callback() {
         input_vel /= kTwoPi;
       }
       write_le<float>(input_pos, frame.data);
-      write_le<int8_t>(static_cast<int8_t>(input_vel * 1000.0F), frame.data + 4);
-      write_le<int8_t>(static_cast<int8_t>(ctrl_msg.input_torque * sign * 1000.0F), frame.data + 6);
+      write_le<int16_t>(static_cast<int16_t>(input_vel * 1000.0F), frame.data + 4);
+      write_le<int16_t>(static_cast<int16_t>(ctrl_msg.input_torque * sign * 1000.0F), frame.data + 6);
       frame.can_dlc = 8;
       break;
     }

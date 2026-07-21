@@ -25,12 +25,13 @@ def generate_launch_description():
                 package="custom_odrive",
                 executable="custom_odrive_node",
                 name="can_node",
-                namespace="odrive_axis0",
+                namespace="wheel_bl",
                 parameters=[
                     defaults,
                     {
-                        "node_id": 0,
+                        "node_id": 2,
                         "interface": "can0",
+                        "invert_direction": True,
                     },
                 ],
                 output="screen",
@@ -39,13 +40,12 @@ def generate_launch_description():
                 package="custom_odrive",
                 executable="custom_odrive_node",
                 name="can_node",
-                namespace="odrive_axis1",
+                namespace="wheel_br",
                 parameters=[
                     defaults,
                     {
-                        "node_id": 1,
+                        "node_id": 3,
                         "interface": "can0",
-                        "invert_direction": True,
                     },
                 ],
                 output="screen",

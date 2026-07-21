@@ -105,6 +105,26 @@ ros2 topic pub -r 10 /odrive_axis0/control_message custom_odrive/msg/ControlMess
 # later: set input_vel to 0.0, then request IDLE (1) and/or set_enabled false
 ```
 
+## Watchdog / publish rate
+
+The node sends CAN traffic only in response to input — there is **no periodic keepalive**. A
+setpoint frame (which feeds the ODrive axis watchdog) is transmitted **once per
+`control_message` you publish**. Staying armed in closed-loop therefore depends on your
+publish rate:
+
+- Publish `control_message` at roughly **5–10× the watchdog rate**. For a 1 s watchdog, that
+  means **≥ 5–10 Hz**, so a few dropped or late messages don't trip it.
+- If the publisher is remote (e.g. over wifi), add more margin or keep the control loop
+  on-board.
+- The `control_message` subscriber is `KeepLast(1)` (reliable by default) — the publisher's
+  QoS must be compatible or messages won't be delivered at all.
+- Stopping the publisher, or calling `set_enabled` with `data: false`, stops setpoints, so the
+  watchdog trips ~1 timeout later and the motor disarms to idle. This is the intended safety
+  behavior — the node does not hold a setpoint on your behalf.
+
+Enable the CAN watchdog in ODrive firmware (`<axis>.config.enable_watchdog` and
+`watchdog_timeout`) so comms loss faults the motor to idle.
+
 ## Compatible devices (upstream)
 
 - ODrive Pro, ODrive S1, ODrive Micro (not ODrive 3.x)
