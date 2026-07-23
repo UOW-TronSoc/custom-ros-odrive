@@ -49,6 +49,12 @@ install(PROGRAMS
   RENAME velocity_ramp_test
 )
 
+install(PROGRAMS
+  scripts/commission.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME commission
+)
+
 install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )

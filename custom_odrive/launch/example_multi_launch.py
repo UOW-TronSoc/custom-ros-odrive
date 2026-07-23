@@ -3,6 +3,15 @@
 Same pattern as example_launch.py (defaults YAML + required/override dict), with
 one Node block per motor. Copy a block to add another axis; only put required
 fields and overrides in each dict.
+
+Mapping used here (matches commission motor configs / typical rover layout):
+  wheel_fl  node_id 1  invert_direction True
+  wheel_bl  node_id 2  invert_direction True
+  wheel_br  node_id 3
+  wheel_fr  node_id 4
+
+All share one SocketCAN interface. Host must bring the iface up first
+(bitrate must match the ODrives / autobaud).
 """
 
 import os

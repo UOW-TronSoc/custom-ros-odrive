@@ -2,11 +2,16 @@
 # Launch files load this first, then pass a dict of overrides.
 #
 # Required (no defaults here — must be set in the launch Node parameters):
-#   node_id: <int>       # ODrive CAN node ID
-#   interface: <string>  # SocketCAN interface name (e.g. can0)
+#   node_id: <int>       # ODrive CAN node ID (axis0.config.can.node_id)
+#   interface: <string>  # SocketCAN interface name (e.g. can0, can_core)
 #
 # Also set on the Node in launch (not a ROS parameter):
 #   namespace: <string>  # ROS namespace for this motor's topics/services
+#
+# Safety / units notes:
+#   control_message_in_radians — ROS uses rad(/s); CAN Simple always uses turns.
+#   start_enabled — initial enable latch only; does not enter CLOSED_LOOP.
+#   invert_direction — flips command + feedback sign (typical for left-side wheels).
 
 /**:
   ros__parameters:
@@ -14,5 +19,5 @@
     axis_idle_on_startup: true           # send IDLE on node startup (safe known state)
     control_message_in_radians: true     # pos/vel as rad (and rad/s), not turns
     invert_direction: false              # flip command and feedback sign
-    request_axis_state_timeout_s: 5.0    # max wait for request_axis_state (s)
+    request_axis_state_timeout_s: 5.0    # max wait for request_axis_state (s); min effective 1.0
     start_enabled: true                  # initial enable-latch state

@@ -1,6 +1,14 @@
 #ifndef BYTE_SWAP_HPP
 #define BYTE_SWAP_HPP
 
+/*
+ * Little-endian load/store helpers for ODrive CAN Simple payloads.
+ *
+ * ODrive encodes multi-byte values little-endian on the wire. read_le / write_le
+ * convert relative to host endianness. Used throughout custom_odrive_node when
+ * packing/unpacking can_frame.data.
+ */
+
 #include <array>
 #include <algorithm>
 #include <bit>

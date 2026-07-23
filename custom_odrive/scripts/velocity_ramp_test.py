@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 """Minimal closed-loop velocity test for custom_odrive.
 
-Streams control_message continuously (feeds the 1s watchdog), clears errors,
+Streams control_message continuously (feeds the axis watchdog), clears errors,
 enables, requests CLOSED_LOOP, and only proceeds if axis_state actually becomes 8.
+
+Why continuous publish matters
+------------------------------
+custom_odrive_node does not send a periodic keepalive. Each control_message
+becomes one CAN setpoint frame, which resets the ODrive watchdog. If this
+script stops publishing (or publishes too slowly), the drive disarms to IDLE.
+
+Also: request_axis_state may report success=true for CLOSED_LOOP after ~1s even
+when the axis never left IDLE (e.g. latched WATCHDOG / NOT_CALIBRATED). Always
+confirm controller_status.axis_state == 8 before trusting motion.
 
 Examples (with example_multi_launch.py running):
   ros2 run custom_odrive velocity_ramp_test -- --ns wheel_fr
@@ -22,6 +32,7 @@ from std_srvs.srv import Empty, SetBool
 from custom_odrive.msg import ControlMessage, ControllerStatus
 from custom_odrive.srv import AxisState, GetErrors
 
+# Match ODrive / custom_odrive enums (see odrive_enums.h / README).
 CONTROL_MODE_VELOCITY = 2
 INPUT_MODE_VEL_RAMP = 2
 AXIS_STATE_IDLE = 1
@@ -29,6 +40,7 @@ AXIS_STATE_CLOSED_LOOP = 8
 
 
 def normalize_ns(ns: str) -> str:
+    """Accept wheel_fl, /wheel_fl, or /wheel_fl/ → /wheel_fl."""
     ns = ns.strip()
     if not ns.startswith("/"):
         ns = "/" + ns
@@ -36,12 +48,14 @@ def normalize_ns(ns: str) -> str:
 
 
 class VelocityTest(Node):
+    """One-shot client: stream setpoints under a motor namespace and arm closed-loop."""
+
     def __init__(self, namespace: str, rate_hz: float, input_vel: float) -> None:
         super().__init__("velocity_ramp_test")
         self._ns = namespace
         self._rate_hz = rate_hz
         self._input_vel = input_vel
-        self._vel = 0.0
+        self._vel = 0.0  # published each tick; set to target after CLOSED_LOOP confirmed
         self._axis_state = 0
         self._active_errors = 0
 
@@ -67,6 +81,7 @@ class VelocityTest(Node):
         )
 
     def _tick(self) -> None:
+        """Publish current velocity setpoint (feeds watchdog every 1/rate_hz)."""
         msg = ControlMessage()
         msg.control_mode = CONTROL_MODE_VELOCITY
         msg.input_mode = INPUT_MODE_VEL_RAMP
@@ -141,6 +156,7 @@ class VelocityTest(Node):
         return r
 
     def wait_for_axis_state(self, wanted: int, timeout_s: float = 3.0) -> bool:
+        """Poll controller_status until axis_state matches (or timeout)."""
         deadline = time.monotonic() + timeout_s
         while rclpy.ok() and time.monotonic() < deadline:
             rclpy.spin_once(self, timeout_sec=0.05)
@@ -173,7 +189,8 @@ def main(argv: list[str] | None = None) -> int:
     rclpy.init()
     node = VelocityTest(namespace=ns, rate_hz=args.rate, input_vel=args.target_vel)
     try:
-        # Stream zeros BEFORE arming so the watchdog is fed the whole time
+        # Stream zeros BEFORE arming so the watchdog is fed the whole time —
+        # otherwise CLOSED_LOOP + silence ≈ immediate WATCHDOG_TIMER_EXPIRED.
         node._vel = 0.0
         warmup = time.monotonic() + 1.0
         while rclpy.ok() and time.monotonic() < warmup:
@@ -222,6 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         return 130
     finally:
+        # Always try to zero velocity and IDLE so we do not leave the wheel spinning.
         try:
             node.get_logger().warn("stopping: vel=0, IDLE")
             node._vel = 0.0

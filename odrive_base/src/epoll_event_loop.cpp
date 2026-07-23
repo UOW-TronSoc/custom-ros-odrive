@@ -1,5 +1,7 @@
 #include "epoll_event_loop.hpp"
 
+// Creates the epoll fd and a stop eventfd so request_stop() can unblock epoll_wait.
+
 EpollEventLoop::EpollEventLoop() {
     epollfd = epoll_create1(0);
     stop_fd_ = eventfd(0, 0);

@@ -1,4 +1,23 @@
 #include "custom_odrive_node.hpp"
+
+/*
+ * Implementation notes
+ * --------------------
+ * CAN arbitration ID (11-bit Simple): (node_id << 5) | cmd_id
+ *   cmd_id is the low 5 bits (see CmdId / ODrive CAN protocol docs).
+ *
+ * Feedback publish gating (ctrl_pub_flag_ / odrv_pub_flag_):
+ *   ODrive sends cyclic messages independently. We OR bits as each arrives and
+ *   publish when a useful combination is present (full set, or encoder-only /
+ *   heartbeat+encoder) so RViz/controllers still get motion feedback even if
+ *   optional cyclic msgs (Iq, torques) are disabled in firmware.
+ *
+ * Unit convention:
+ *   ODrive CAN Simple uses turns and turns/s. With control_message_in_radians
+ *   true (package default), ROS topics use rad / rad/s; we convert on the way
+ *   in (commands) and out (estimates).
+ */
+
 #include "odrive_enums.h"
 #include "odrive_error_decoder.hpp"
 #include "epoll_event_loop.hpp"
@@ -10,30 +29,32 @@ namespace {
 constexpr float kTwoPi = 6.28318530717958647692F;
 }  // namespace
 
+// Subset of ODrive CAN Simple command IDs used by this node.
 enum CmdId : uint32_t {
   kHeartbeat = 0x001,
   kGetError = 0x003,
   kSetAxisState = 0x007,
   kGetEncoderEstimates = 0x009,
   kSetControllerMode = 0x00b,
-  kSetInputPos,
-  kSetInputVel,
-  kSetInputTorque,
+  kSetInputPos,   // 0x00c
+  kSetInputVel,   // 0x00d
+  kSetInputTorque,  // 0x00e
   kGetIq = 0x014,
-  kGetTemp,
+  kGetTemp,       // 0x015
   kGetBusVoltageCurrent = 0x017,
   kClearErrors = 0x018,
   kGetTorques = 0x01c,
 };
 
 enum ControlMode : uint64_t {
-  kVoltageControl,
-  kTorqueControl,
-  kVelocityControl,
-  kPositionControl,
+  kVoltageControl,   // 0 — not supported for TX here
+  kTorqueControl,    // 1
+  kVelocityControl,  // 2
+  kPositionControl,  // 3
 };
 
 CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(node_name) {
+  // Declarations only — values applied in init() after the process is ready.
   rclcpp::Node::declare_parameter<std::string>("interface", "can0");
   rclcpp::Node::declare_parameter<uint16_t>("node_id", 0);
   rclcpp::Node::declare_parameter<bool>("axis_idle_on_shutdown", true);
@@ -43,9 +64,12 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
   rclcpp::Node::declare_parameter<double>("request_axis_state_timeout_s", 5.0);
   rclcpp::Node::declare_parameter<bool>("start_enabled", true);
 
+  // Two mutually exclusive groups + MultiThreadedExecutor (main.cpp) so a
+  // blocking request_axis_state does not starve control_message callbacks.
   sub_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   srv_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
+  // Feedback is best-effort / KeepLast — matches typical high-rate telemetry.
   rclcpp::QoS ctrl_stat_qos(rclcpp::KeepLast(10));
   ctrl_stat_qos.best_effort();
   ctrl_publisher_ = rclcpp::Node::create_publisher<ControllerStatus>("controller_status", ctrl_stat_qos);
@@ -54,6 +78,7 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
   odrv_stat_qos.best_effort();
   odrv_publisher_ = rclcpp::Node::create_publisher<ODriveStatus>("odrive_status", odrv_stat_qos);
 
+  // KeepLast(1): only the latest setpoint matters; publisher QoS must be compatible.
   rclcpp::QoS ctrl_msg_qos(rclcpp::KeepLast(1));
   rclcpp::SubscriptionOptions sub_opts;
   sub_opts.callback_group = sub_cb_group_;
@@ -91,6 +116,7 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
 }
 
 void CustomODriveNode::send_axis_idle() {
+  // Direct TX (startup / shutdown paths already on a context that can write).
   struct can_frame frame = {};
   frame.can_id = node_id_ << 5 | CmdId::kSetAxisState;
   write_le<uint32_t>(ODriveAxisState::AXIS_STATE_IDLE, frame.data);
@@ -99,6 +125,7 @@ void CustomODriveNode::send_axis_idle() {
 }
 
 void CustomODriveNode::request_idle_on_can() {
+  // Cross-thread: stash desired state and wake the CAN thread via eventfd.
   {
     std::unique_lock<std::mutex> guard(axis_state_mutex_);
     axis_state_ = ODriveAxisState::AXIS_STATE_IDLE;
@@ -131,6 +158,7 @@ bool CustomODriveNode::init(EpollEventLoop* event_loop) {
   enabled_.store(rclcpp::Node::get_parameter("start_enabled").as_bool());
   std::string interface = rclcpp::Node::get_parameter("interface").as_string();
 
+  // Service always waits at least 1s (upstream behavior); clamp timeout accordingly.
   if (request_axis_state_timeout_s_ < 1.0) {
     RCLCPP_WARN(rclcpp::Node::get_logger(),
                 "request_axis_state_timeout_s (%.3f) is below the 1s minimum wait; clamping to 1.0",
@@ -176,6 +204,8 @@ bool CustomODriveNode::init(EpollEventLoop* event_loop) {
 
 void CustomODriveNode::fill_axis_state_response(std::shared_ptr<AxisState::Response> response, bool success,
                                                bool timed_out) {
+  // Snapshot latest heartbeat-derived fields under ctrl_stat_mutex_ (caller holds it
+  // for the wait path; rejection paths lock before calling).
   response->success = success;
   response->timed_out = timed_out;
   response->axis_state = ctrl_stat_.axis_state;
@@ -187,6 +217,7 @@ void CustomODriveNode::publish_controller_status() {
   ControllerStatus msg = ctrl_stat_;
   const float sign = invert_direction_ ? -1.0F : 1.0F;
 
+  // Invert applies to mechanical quantities so left/right wheels share a chassis frame.
   msg.pos_estimate *= sign;
   msg.vel_estimate *= sign;
   msg.torque_target *= sign;
@@ -194,6 +225,7 @@ void CustomODriveNode::publish_controller_status() {
   msg.enabled = enabled_.load();
 
   if (control_message_in_radians_) {
+    // CAN estimates are turns / turns/s → rad / rad/s for ROS.
     msg.pos_estimate *= kTwoPi;
     msg.vel_estimate *= kTwoPi;
   }
@@ -202,6 +234,7 @@ void CustomODriveNode::publish_controller_status() {
 }
 
 void CustomODriveNode::recv_callback(const can_frame& frame) {
+  // Ignore frames for other node_ids on a shared bus.
   if (((frame.can_id >> 5) & 0x3F) != node_id_) return;
 
   switch (frame.can_id & 0x1F) {
@@ -213,6 +246,7 @@ void CustomODriveNode::recv_callback(const can_frame& frame) {
       ctrl_stat_.procedure_result = read_le<uint8_t>(frame.data + 5);
       ctrl_stat_.trajectory_done_flag = read_le<bool>(frame.data + 6);
       ctrl_pub_flag_ |= 0b0001;
+      // Wake request_axis_state waiters so they can re-check procedure_result.
       fresh_heartbeat_.notify_one();
       break;
     }
@@ -264,6 +298,7 @@ void CustomODriveNode::recv_callback(const can_frame& frame) {
       ctrl_pub_flag_ |= 0b1000;
       break;
     }
+    // Host→ODrive commands: no payload handling if somehow received.
     case CmdId::kSetAxisState:
     case CmdId::kSetControllerMode:
     case CmdId::kSetInputPos:
@@ -278,12 +313,15 @@ void CustomODriveNode::recv_callback(const can_frame& frame) {
     }
   }
 
+  // Publish controller_status when we have a full cyclic set (0b1111), encoder-only
+  // (0b0010), or heartbeat+encoder (0b0011). Resets flags after publish.
   if (ctrl_pub_flag_ == 0b1111 || ctrl_pub_flag_ == 0b0010 || ctrl_pub_flag_ == 0b0011) {
     std::lock_guard<std::mutex> guard(ctrl_stat_mutex_);
     publish_controller_status();
     ctrl_pub_flag_ = 0;
   }
 
+  // odrive_status needs error + temp + bus (all three cyclic messages enabled).
   if (odrv_pub_flag_ == 0b111) {
     odrv_publisher_->publish(odrv_stat_);
     odrv_pub_flag_ = 0;
@@ -291,12 +329,13 @@ void CustomODriveNode::recv_callback(const can_frame& frame) {
 }
 
 void CustomODriveNode::subscriber_callback(const ControlMessage::SharedPtr msg) {
+  // Drop silently while disabled or drivestop asserted — do not feed the watchdog.
   if (!commands_allowed()) {
     return;
   }
   std::lock_guard<std::mutex> guard(ctrl_msg_mutex_);
   ctrl_msg_ = *msg;
-  sub_evt_.set();
+  sub_evt_.set();  // Wake CAN thread → ctrl_msg_callback()
 }
 
 void CustomODriveNode::drivestop_callback(const Bool::SharedPtr msg) {
@@ -307,6 +346,7 @@ void CustomODriveNode::drivestop_callback(const Bool::SharedPtr msg) {
     return;
   }
 
+  // Idempotent: only queue one IDLE when transitioning to asserted.
   const bool already_stopped = drivestop_active_.exchange(true);
   if (already_stopped) {
     RCLCPP_DEBUG(rclcpp::Node::get_logger(), "/drivestop=true: already asserted");
@@ -322,6 +362,7 @@ void CustomODriveNode::service_callback(const std::shared_ptr<AxisState::Request
                                         std::shared_ptr<AxisState::Response> response) {
   const bool requesting_idle = request->axis_requested_state == ODriveAxisState::AXIS_STATE_IDLE;
 
+  // Always allow IDLE even when stopped/disabled so the axis can be put safe.
   if (drivestop_active_.load() && !requesting_idle) {
     RCLCPP_WARN(rclcpp::Node::get_logger(),
                 "rejecting axis state %u: /drivestop is true (publish /drivestop data:=false first)",
@@ -347,6 +388,9 @@ void CustomODriveNode::service_callback(const std::shared_ptr<AxisState::Request
   }
   srv_evt_.set();
 
+  // Block until procedure completes or timeout. Upstream always waits ≥1s.
+  // CLOSED_LOOP is treated as "complete" after 1s even if still BUSY briefly —
+  // timed_out only happens for long procedures (e.g. calibration).
   std::unique_lock<std::mutex> guard(ctrl_stat_mutex_);
   auto call_time = std::chrono::steady_clock::now();
   const auto timeout = std::chrono::duration<double>(request_axis_state_timeout_s_);
@@ -380,6 +424,7 @@ void CustomODriveNode::service_clear_errors_callback(const std::shared_ptr<Empty
 void CustomODriveNode::service_set_enabled_callback(const std::shared_ptr<SetBool::Request> request,
                                                     std::shared_ptr<SetBool::Response> response) {
   if (request->data) {
+    // Cannot arm while global stop is latched.
     if (drivestop_active_.load()) {
       response->success = false;
       response->message = "cannot enable: /drivestop is true";
@@ -393,6 +438,7 @@ void CustomODriveNode::service_set_enabled_callback(const std::shared_ptr<SetBoo
     return;
   }
 
+  // Disable: ignore further control_message and request IDLE on the bus.
   enabled_.store(false);
   request_idle_on_can();
   response->success = true;
@@ -402,6 +448,7 @@ void CustomODriveNode::service_set_enabled_callback(const std::shared_ptr<SetBoo
 
 void CustomODriveNode::service_get_errors_callback(const std::shared_ptr<GetErrors::Request> /*request*/,
                                                    std::shared_ptr<GetErrors::Response> response) {
+  // Snapshot last Get_Error cyclic payload and decode bitfields to strings.
   uint32_t active_errors;
   uint32_t disarm_reason;
   {
@@ -417,6 +464,7 @@ void CustomODriveNode::service_get_errors_callback(const std::shared_ptr<GetErro
 }
 
 void CustomODriveNode::request_state_callback() {
+  // CAN thread: optional ClearErrors then Set_Axis_State for the pending request.
   uint32_t axis_state;
   {
     std::unique_lock<std::mutex> guard(axis_state_mutex_);
@@ -425,6 +473,7 @@ void CustomODriveNode::request_state_callback() {
 
   struct can_frame frame;
 
+  // Non-zero state requests clear errors first (axis_state_ 0 is unused as a request).
   if (axis_state != 0) {
     frame.can_id = node_id_ << 5 | CmdId::kClearErrors;
     write_le<uint8_t>(0, frame.data);
@@ -441,12 +490,13 @@ void CustomODriveNode::request_state_callback() {
 void CustomODriveNode::request_clear_errors_callback() {
   struct can_frame frame = {};
   frame.can_id = node_id_ << 5 | CmdId::kClearErrors;
-  write_le<uint8_t>(0, frame.data);
+  write_le<uint8_t>(0, frame.data);  // Identify=0 (no LED blink)
   frame.can_dlc = 1;
   can_intf_.send_can_frame(frame);
 }
 
 void CustomODriveNode::ctrl_msg_callback() {
+  // CAN thread: translate latest ControlMessage into Simple setpoint frame(s).
   if (!commands_allowed()) {
     return;
   }
@@ -461,6 +511,7 @@ void CustomODriveNode::ctrl_msg_callback() {
   const uint32_t input_mode = ctrl_msg.input_mode;
   const float sign = invert_direction_ ? -1.0F : 1.0F;
 
+  // Only send Set_Controller_Mode when mode pair changes (reduces bus load).
   if (!controller_mode_sent_ || control_mode != last_control_mode_ || input_mode != last_input_mode_) {
     struct can_frame mode_frame = {};
     mode_frame.can_id = node_id_ << 5 | kSetControllerMode;
@@ -492,10 +543,10 @@ void CustomODriveNode::ctrl_msg_callback() {
       frame.can_id = node_id_ << 5 | kSetInputVel;
       float input_vel = ctrl_msg.input_vel * sign;
       if (control_message_in_radians_) {
-        input_vel /= kTwoPi;
+        input_vel /= kTwoPi;  // rad/s → turns/s
       }
       write_le<float>(input_vel, frame.data);
-      write_le<float>(ctrl_msg.input_torque * sign, frame.data + 4);
+      write_le<float>(ctrl_msg.input_torque * sign, frame.data + 4);  // torque FF
       frame.can_dlc = 8;
       break;
     }
@@ -508,6 +559,7 @@ void CustomODriveNode::ctrl_msg_callback() {
         input_pos /= kTwoPi;
         input_vel /= kTwoPi;
       }
+      // Protocol: vel/torque feedforward are int16 in milli-units.
       write_le<float>(input_pos, frame.data);
       write_le<int16_t>(static_cast<int16_t>(input_vel * 1000.0F), frame.data + 4);
       write_le<int16_t>(static_cast<int16_t>(ctrl_msg.input_torque * sign * 1000.0F), frame.data + 6);
@@ -519,6 +571,7 @@ void CustomODriveNode::ctrl_msg_callback() {
       return;
   }
 
+  // This TX also resets the ODrive axis watchdog when watchdog is enabled.
   can_intf_.send_can_frame(frame);
 }
 

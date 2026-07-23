@@ -2,6 +2,12 @@
 #ifndef ODriveEnums_h
 #define ODriveEnums_h
 
+/*
+ * ODrive firmware enum / bitfield constants used by custom_odrive and helpers.
+ * Values mirror the Fibre API / docs; keep in sync when bumping target FW.
+ * Error bitfields are decoded for humans by odrive_error_decoder.hpp.
+ */
+
 // ODrive.GpioMode
 enum ODriveGpioMode {
     GPIO_MODE_DIGITAL                        = 0,

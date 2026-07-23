@@ -3,6 +3,14 @@
 Loads shared defaults from config/custom_odrive_defaults.yaml, then sets the
 required per-motor fields (namespace, node_id, interface). Add optional
 parameter overrides in the dict only when they differ from the defaults.
+
+Required per Node
+-----------------
+  namespace   — ROS namespace for topics/services (e.g. wheel_bl → /wheel_bl/...)
+  node_id     — ODrive CAN Simple node_id (must match firmware axis0.config.can.node_id)
+  interface   — SocketCAN iface already UP on the host (can0, can_core, …)
+
+Copy this file into a rover package and edit for production hardware.
 """
 
 import os
@@ -29,10 +37,11 @@ def generate_launch_description():
                 parameters=[
                     defaults,
                     {
-                        # Required (no defaults in config)
+                        # Required (no defaults in yaml)
                         "node_id": 3,
                         "interface": "can0",
                         # Optional overrides of custom_odrive_defaults.yaml go here
+                        # e.g. "invert_direction": True,
                     },
                 ],
                 output="screen",

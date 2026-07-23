@@ -11,6 +11,9 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 
+// Open a non-blocking RAW CAN socket on `interface` and register EPOLLIN with the
+// shared event loop. The iface must already be UP (host: ip link / setup_can.bash).
+
 bool SocketCanIntf::init(const std::string& interface, EpollEventLoop* event_loop, FrameProcessor frame_processor) {
     interface_ = interface;
     event_loop_ = event_loop;

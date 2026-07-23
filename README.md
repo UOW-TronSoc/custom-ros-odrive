@@ -142,6 +142,27 @@ publish rate:
 Enable the CAN watchdog in ODrive firmware (`<axis>.config.enable_watchdog` and
 `watchdog_timeout`) so comms loss faults the motor to idle.
 
+## Commissioning (config / calibrate / save)
+
+Apply a per-motor config over SocketCAN via Fibre (odrivetool-over-CAN), without USB:
+
+```bash
+python3 -m pip install --upgrade odrive   # >=0.6.11.post0; FW on drive >=0.6.11
+
+ros2 run custom_odrive commission -- \
+  --can can_core \
+  --config /path/to/motor_config.py \
+  --ns /odrive_axis0 \
+  --calibrate \
+  --save
+```
+
+`SERIAL_NUMBER` must live in the config file (see
+[`custom_odrive/config/example_motor_config.py`](custom_odrive/config/example_motor_config.py)).
+Use `--ns` whenever that motor’s `custom_odrive_node` is running so it is parked
+first. `--calibrate` asks you to confirm the wheel is off the ground. Details:
+[`custom_odrive/README.md`](custom_odrive/README.md#commissioning-config--calibrate--save-over-can).
+
 ## Compatible devices (upstream)
 
 - ODrive Pro, ODrive S1, ODrive Micro (not ODrive 3.x)

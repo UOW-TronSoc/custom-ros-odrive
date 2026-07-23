@@ -66,3 +66,34 @@ ros2 launch custom_odrive example_multi_launch.py
 For a rover, copy the multi launch into the rover package, reuse the defaults YAML (or your own), and add one `Node` block per wheel.
 
 For firmware cyclic-message setup, see the ODrive [ROS CAN Package Guide](https://docs.odriverobotics.com/v/latest/guides/ros-package.html).
+
+## Commissioning (config / calibrate / save over CAN)
+
+One-shot script that uses the official [odrivetool-over-CAN](https://docs.odriverobotics.com/v/latest/interfaces/odrivetool.html#using-odrivetool-via-can) path (`odrive` Python Fibre-over-CAN on SocketCAN). No USB required.
+
+**Requirements**
+- `python3 -m pip install --upgrade odrive` (≥0.6.11.post0)
+- ODrive firmware ≥0.6.11
+- SocketCAN interface already up on the host (e.g. `can0`, or kanga `can_core` / `can_payload`)
+
+**Motor config** — one `.py` per ESC. `SERIAL_NUMBER` is required and is the **only** identity source (no CLI serial override). Example: [`config/example_motor_config.py`](config/example_motor_config.py).
+
+**Coexistence with `custom_odrive_node`**
+- Prefer `--ns` matching that motor’s namespace so the script calls `set_enabled(false)` + IDLE before Fibre work
+- Aborts if `/drivestop` is asserted
+- Without `--ns`, confirms interactively that nothing is commanding the motor
+- Does **not** re-enable after commission; use `set_enabled` when ready
+- After `--save` the drive reboots (brief heartbeat dropout)
+
+**Calibration** — with `--calibrate`, prompts to confirm the wheel is off the ground before starting `FULL_CALIBRATION_SEQUENCE`.
+
+```bash
+ros2 run custom_odrive commission -- \
+  --can can_core \
+  --config /path/to/motor_config.py \
+  --ns /odrive_axis0 \
+  --calibrate \
+  --save
+```
+
+On a laptop with a single adapter, use `--can can0`. Same script works inside the kanga_wip Orin Docker image (`network_mode: host`, `privileged`) once SocketCAN is up on the host and `odrive` is pip-installed in the container.
