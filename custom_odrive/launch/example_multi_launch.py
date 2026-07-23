@@ -25,6 +25,21 @@ def generate_launch_description():
                 package="custom_odrive",
                 executable="custom_odrive_node",
                 name="can_node",
+                namespace="wheel_fl",
+                parameters=[
+                    defaults,
+                    {
+                        "node_id": 1,
+                        "interface": "can0",
+                        "invert_direction": True,
+                    },
+                ],
+                output="screen",
+            ),
+            Node(
+                package="custom_odrive",
+                executable="custom_odrive_node",
+                name="can_node",
                 namespace="wheel_bl",
                 parameters=[
                     defaults,
@@ -45,6 +60,20 @@ def generate_launch_description():
                     defaults,
                     {
                         "node_id": 3,
+                        "interface": "can0",
+                    },
+                ],
+                output="screen",
+            ),
+            Node(
+                package="custom_odrive",
+                executable="custom_odrive_node",
+                name="can_node",
+                namespace="wheel_fr",
+                parameters=[
+                    defaults,
+                    {
+                        "node_id": 4,
                         "interface": "can0",
                     },
                 ],

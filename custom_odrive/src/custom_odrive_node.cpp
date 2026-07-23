@@ -1,5 +1,6 @@
 #include "custom_odrive_node.hpp"
 #include "odrive_enums.h"
+#include "odrive_error_decoder.hpp"
 #include "epoll_event_loop.hpp"
 #include "byte_swap.hpp"
 #include <sys/eventfd.h>
@@ -42,6 +43,9 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
   rclcpp::Node::declare_parameter<double>("request_axis_state_timeout_s", 5.0);
   rclcpp::Node::declare_parameter<bool>("start_enabled", true);
 
+  sub_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  srv_cb_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
   rclcpp::QoS ctrl_stat_qos(rclcpp::KeepLast(10));
   ctrl_stat_qos.best_effort();
   ctrl_publisher_ = rclcpp::Node::create_publisher<ControllerStatus>("controller_status", ctrl_stat_qos);
@@ -51,8 +55,10 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
   odrv_publisher_ = rclcpp::Node::create_publisher<ODriveStatus>("odrive_status", odrv_stat_qos);
 
   rclcpp::QoS ctrl_msg_qos(rclcpp::KeepLast(1));
+  rclcpp::SubscriptionOptions sub_opts;
+  sub_opts.callback_group = sub_cb_group_;
   subscriber_ = rclcpp::Node::create_subscription<ControlMessage>(
-      "control_message", ctrl_msg_qos, std::bind(&CustomODriveNode::subscriber_callback, this, _1));
+      "control_message", ctrl_msg_qos, std::bind(&CustomODriveNode::subscriber_callback, this, _1), sub_opts);
 
   rclcpp::QoS srv_qos(rclcpp::KeepAll{});
 
@@ -63,11 +69,17 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
 #endif
 
   service_ = rclcpp::Node::create_service<AxisState>(
-      "request_axis_state", std::bind(&CustomODriveNode::service_callback, this, _1, _2), srv_qos_profile);
+      "request_axis_state", std::bind(&CustomODriveNode::service_callback, this, _1, _2), srv_qos_profile,
+      srv_cb_group_);
   service_clear_errors_ = rclcpp::Node::create_service<Empty>(
-      "clear_errors", std::bind(&CustomODriveNode::service_clear_errors_callback, this, _1, _2), srv_qos_profile);
+      "clear_errors", std::bind(&CustomODriveNode::service_clear_errors_callback, this, _1, _2), srv_qos_profile,
+      srv_cb_group_);
   service_set_enabled_ = rclcpp::Node::create_service<SetBool>(
-      "set_enabled", std::bind(&CustomODriveNode::service_set_enabled_callback, this, _1, _2), srv_qos_profile);
+      "set_enabled", std::bind(&CustomODriveNode::service_set_enabled_callback, this, _1, _2), srv_qos_profile,
+      srv_cb_group_);
+  service_get_errors_ = rclcpp::Node::create_service<GetErrors>(
+      "get_errors", std::bind(&CustomODriveNode::service_get_errors_callback, this, _1, _2), srv_qos_profile,
+      srv_cb_group_);
 }
 
 void CustomODriveNode::send_axis_idle() {
@@ -334,6 +346,22 @@ void CustomODriveNode::service_set_enabled_callback(const std::shared_ptr<SetBoo
   response->success = true;
   response->message = "motor disabled; IDLE requested";
   RCLCPP_WARN(rclcpp::Node::get_logger(), "motor disabled; control ignored until set_enabled(true)");
+}
+
+void CustomODriveNode::service_get_errors_callback(const std::shared_ptr<GetErrors::Request> /*request*/,
+                                                   std::shared_ptr<GetErrors::Response> response) {
+  uint32_t active_errors;
+  uint32_t disarm_reason;
+  {
+    std::lock_guard<std::mutex> guard(odrv_stat_mutex_);
+    active_errors = odrv_stat_.active_errors;
+    disarm_reason = odrv_stat_.disarm_reason;
+  }
+
+  response->active_errors = active_errors;
+  response->disarm_reason = disarm_reason;
+  response->active_errors_decoded = odrive_decode::decode_odrive_error(active_errors);
+  response->disarm_reason_decoded = odrive_decode::decode_odrive_error(disarm_reason);
 }
 
 void CustomODriveNode::request_state_callback() {

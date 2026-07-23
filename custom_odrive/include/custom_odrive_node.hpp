@@ -7,6 +7,7 @@
 #include "custom_odrive/msg/controller_status.hpp"
 #include "custom_odrive/msg/control_message.hpp"
 #include "custom_odrive/srv/axis_state.hpp"
+#include "custom_odrive/srv/get_errors.hpp"
 #include "std_srvs/srv/empty.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "socket_can.hpp"
@@ -26,6 +27,7 @@ using ControllerStatus = custom_odrive::msg::ControllerStatus;
 using ControlMessage = custom_odrive::msg::ControlMessage;
 
 using AxisState = custom_odrive::srv::AxisState;
+using GetErrors = custom_odrive::srv::GetErrors;
 using Empty = std_srvs::srv::Empty;
 using SetBool = std_srvs::srv::SetBool;
 
@@ -44,6 +46,8 @@ private:
                                      std::shared_ptr<Empty::Response> response);
   void service_set_enabled_callback(const std::shared_ptr<SetBool::Request> request,
                                     std::shared_ptr<SetBool::Response> response);
+  void service_get_errors_callback(const std::shared_ptr<GetErrors::Request> request,
+                                   std::shared_ptr<GetErrors::Response> response);
   void request_state_callback();
   void request_clear_errors_callback();
   void ctrl_msg_callback();
@@ -59,6 +63,12 @@ private:
   bool invert_direction_{false};
   double request_axis_state_timeout_s_{5.0};
   SocketCanIntf can_intf_ = SocketCanIntf();
+
+  // Separate groups so control_message can be processed while request_axis_state
+  // blocks (>=1s). With a single MutuallyExclusive group + SingleThreadedExecutor,
+  // setpoint forwarding stops during that wait and a 1s watchdog disarms the axis.
+  rclcpp::CallbackGroup::SharedPtr sub_cb_group_;
+  rclcpp::CallbackGroup::SharedPtr srv_cb_group_;
 
   short int ctrl_pub_flag_ = 0;
   std::mutex ctrl_stat_mutex_;
@@ -89,6 +99,8 @@ private:
 
   std::atomic<bool> enabled_{true};
   rclcpp::Service<SetBool>::SharedPtr service_set_enabled_;
+
+  rclcpp::Service<GetErrors>::SharedPtr service_get_errors_;
 };
 
 #endif  // CUSTOM_ODRIVE_NODE_HPP

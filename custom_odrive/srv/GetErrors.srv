@@ -1,0 +1,18 @@
+# Returns the most recently received ODrive error state for this axis.
+# The node reports the last values it received via Get_Error (CAN cmd 0x003),
+# so the ODrive must be configured to transmit that message (cyclically) for
+# these fields to be populated.
+---
+
+# Raw ODrive.Error bitfield of currently-active errors.
+# See https://docs.odriverobotics.com/v/latest/fibre_types/com_odriverobotics_ODrive.html#ODrive.Error
+uint32 active_errors
+
+# Raw ODrive.Error bitfield describing why the axis last disarmed (0 = none).
+uint32 disarm_reason
+
+# Human-readable names of the set bits in active_errors (["NONE"] if clear).
+string[] active_errors_decoded
+
+# Human-readable names of the set bits in disarm_reason (["NONE"] if clear).
+string[] disarm_reason_decoded

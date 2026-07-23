@@ -15,6 +15,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ControllerStatus.msg"
   "msg/ODriveStatus.msg"
   "srv/AxisState.srv"
+  "srv/GetErrors.srv"
 )
 ament_export_dependencies(rosidl_default_runtime)
 
@@ -38,6 +39,12 @@ target_compile_features(custom_odrive_node PRIVATE cxx_std_20)
 install(
   TARGETS custom_odrive_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/velocity_ramp_test.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME velocity_ramp_test
 )
 
 install(DIRECTORY launch config
