@@ -68,15 +68,20 @@ ros2 service call /odrive_axis0/set_enabled std_srvs/srv/SetBool "{data: false}"
 
 ### Global `/drivestop` (all motors)
 
-Every `custom_odrive_node` listens on absolute `/drivestop` (`std_msgs/msg/Bool`):
+Every `custom_odrive_node` subscribes to absolute `/drivestop` (`std_msgs/msg/Bool`, reliable + transient local).
+
+**Local default: OFF** — until a `/drivestop` message arrives, this node does not assert stop and allows motion commands (subject to `set_enabled`).
 
 ```bash
-# Stop all ODrive motors: IDLE + block commands
-ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: false}"
-
-# Allow commands again (does not auto-enable or enter closed loop)
+# Assert stop: IDLE + block motion commands
 ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: true}"
+
+# Clear stop (drivestop off); does not auto-enable or enter closed loop
+ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: false}"
 ```
+
+If the last stop/allow value must survive process restarts, keep a long-lived system latch
+publisher on `/drivestop` (same QoS) in shared rover infrastructure — not in this package.
 
 ### Enter closed-loop control
 

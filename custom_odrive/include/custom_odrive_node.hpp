@@ -105,8 +105,9 @@ private:
 
   // Local enable latch (set_enabled). Independent of /drivestop.
   std::atomic<bool> enabled_{true};
-  // Global drive allow from /drivestop: true = commands allowed, false = IDLE + block.
-  std::atomic<bool> drive_allowed_{true};
+  // /drivestop latch: true = IDLE + block motion commands; false = allow.
+  // Local default is OFF (false) until a /drivestop message is received.
+  std::atomic<bool> drivestop_active_{false};
   rclcpp::Service<SetBool>::SharedPtr service_set_enabled_;
 
   rclcpp::Service<GetErrors>::SharedPtr service_get_errors_;

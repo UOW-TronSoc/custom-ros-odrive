@@ -11,11 +11,12 @@ For build steps and a CLI walkthrough (closed loop, velocity, enable/disable), s
 ### Subscribes
 
 * `control_message` (`custom_odrive/msg/ControlMessage`): setpoints for the ODrive  
-  Ignored while the motor is disabled via `set_enabled` or while `/drivestop` is `false`.
-* `/drivestop` (`std_msgs/msg/Bool`, absolute topic, transient local): global drive allow/stop  
-  - `data: false` → request IDLE and **block** control / `set_enabled(true)` / non-IDLE state requests  
-  - `data: true` → clear the drivestop latch so normal commands are allowed again (does **not** auto-enable or enter closed loop)  
-  Default until a message is received: allowed (`true`).
+  Ignored while the motor is disabled via `set_enabled` or while `/drivestop` is `true`.
+* `/drivestop` (`std_msgs/msg/Bool`, absolute topic, reliable + transient local): global drive stop  
+  - **Local default: OFF** — until a message is received, drivestop is not asserted and motion commands are allowed.  
+  - `data: true` → request IDLE and block control / `set_enabled(true)` / non-IDLE state requests  
+  - `data: false` → drivestop off; normal commands allowed again (does **not** auto-enable or enter closed loop)  
+  - A long-lived system latch publisher (same QoS) should own the last value across restarts; this node only subscribes.
 
 ### Publishes
 
