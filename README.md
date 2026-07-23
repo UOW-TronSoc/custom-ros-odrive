@@ -66,6 +66,18 @@ ros2 service call /odrive_axis0/set_enabled std_srvs/srv/SetBool "{data: true}"
 ros2 service call /odrive_axis0/set_enabled std_srvs/srv/SetBool "{data: false}"
 ```
 
+### Global `/drivestop` (all motors)
+
+Every `custom_odrive_node` listens on absolute `/drivestop` (`std_msgs/msg/Bool`):
+
+```bash
+# Stop all ODrive motors: IDLE + block commands
+ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: false}"
+
+# Allow commands again (does not auto-enable or enter closed loop)
+ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: true}"
+```
+
 ### Enter closed-loop control
 
 ```bash

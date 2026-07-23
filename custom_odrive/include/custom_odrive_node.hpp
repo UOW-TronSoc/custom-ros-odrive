@@ -8,6 +8,7 @@
 #include "custom_odrive/msg/control_message.hpp"
 #include "custom_odrive/srv/axis_state.hpp"
 #include "custom_odrive/srv/get_errors.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "std_srvs/srv/empty.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "socket_can.hpp"
@@ -30,6 +31,7 @@ using AxisState = custom_odrive::srv::AxisState;
 using GetErrors = custom_odrive::srv::GetErrors;
 using Empty = std_srvs::srv::Empty;
 using SetBool = std_srvs::srv::SetBool;
+using Bool = std_msgs::msg::Bool;
 
 class CustomODriveNode : public rclcpp::Node {
 public:
@@ -40,6 +42,7 @@ public:
 private:
   void recv_callback(const can_frame& frame);
   void subscriber_callback(const ControlMessage::SharedPtr msg);
+  void drivestop_callback(const Bool::SharedPtr msg);
   void service_callback(const std::shared_ptr<AxisState::Request> request,
                         std::shared_ptr<AxisState::Response> response);
   void service_clear_errors_callback(const std::shared_ptr<Empty::Request> request,
@@ -52,6 +55,8 @@ private:
   void request_clear_errors_callback();
   void ctrl_msg_callback();
   void send_axis_idle();
+  void request_idle_on_can();
+  bool commands_allowed() const;
   void publish_controller_status();
   void fill_axis_state_response(std::shared_ptr<AxisState::Response> response, bool success, bool timed_out);
   inline bool verify_length(const std::string& name, uint8_t expected, uint8_t length);
@@ -87,6 +92,7 @@ private:
   uint32_t last_control_mode_ = 0;
   uint32_t last_input_mode_ = 0;
   rclcpp::Subscription<ControlMessage>::SharedPtr subscriber_;
+  rclcpp::Subscription<Bool>::SharedPtr drivestop_subscriber_;
 
   EpollEvent srv_evt_;
   uint32_t axis_state_;
@@ -97,7 +103,10 @@ private:
   EpollEvent srv_clear_errors_evt_;
   rclcpp::Service<Empty>::SharedPtr service_clear_errors_;
 
+  // Local enable latch (set_enabled). Independent of /drivestop.
   std::atomic<bool> enabled_{true};
+  // Global drive allow from /drivestop: true = commands allowed, false = IDLE + block.
+  std::atomic<bool> drive_allowed_{true};
   rclcpp::Service<SetBool>::SharedPtr service_set_enabled_;
 
   rclcpp::Service<GetErrors>::SharedPtr service_get_errors_;

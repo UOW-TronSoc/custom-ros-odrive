@@ -60,6 +60,14 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
   subscriber_ = rclcpp::Node::create_subscription<ControlMessage>(
       "control_message", ctrl_msg_qos, std::bind(&CustomODriveNode::subscriber_callback, this, _1), sub_opts);
 
+  // Absolute /drivestop: false = IDLE + block commands; true = allow commands again.
+  // Transient local so late-joining motor nodes see the last stop/allow state.
+  rclcpp::QoS drivestop_qos(rclcpp::KeepLast(1));
+  drivestop_qos.reliable();
+  drivestop_qos.transient_local();
+  drivestop_subscriber_ = rclcpp::Node::create_subscription<Bool>(
+      "/drivestop", drivestop_qos, std::bind(&CustomODriveNode::drivestop_callback, this, _1), sub_opts);
+
   rclcpp::QoS srv_qos(rclcpp::KeepAll{});
 
 #if RCLCPP_VERSION_MAJOR >= 18
@@ -88,6 +96,18 @@ void CustomODriveNode::send_axis_idle() {
   write_le<uint32_t>(ODriveAxisState::AXIS_STATE_IDLE, frame.data);
   frame.can_dlc = 4;
   can_intf_.send_can_frame(frame);
+}
+
+void CustomODriveNode::request_idle_on_can() {
+  {
+    std::unique_lock<std::mutex> guard(axis_state_mutex_);
+    axis_state_ = ODriveAxisState::AXIS_STATE_IDLE;
+  }
+  srv_evt_.set();
+}
+
+bool CustomODriveNode::commands_allowed() const {
+  return enabled_.load() && drive_allowed_.load();
 }
 
 void CustomODriveNode::deinit() {
@@ -143,6 +163,7 @@ bool CustomODriveNode::init(EpollEventLoop* event_loop) {
   RCLCPP_INFO(rclcpp::Node::get_logger(), "request_axis_state_timeout_s: %.3f", request_axis_state_timeout_s_);
   RCLCPP_INFO(rclcpp::Node::get_logger(), "start_enabled: %s", enabled_.load() ? "true" : "false");
   RCLCPP_INFO(rclcpp::Node::get_logger(), "axis_idle_on_startup: %s", axis_idle_on_startup_ ? "true" : "false");
+  RCLCPP_INFO(rclcpp::Node::get_logger(), "listening on /drivestop (false=stop/IDLE+block, true=allow)");
 
   if (axis_idle_on_startup_) {
     RCLCPP_INFO(rclcpp::Node::get_logger(), "requesting IDLE on startup");
@@ -269,7 +290,7 @@ void CustomODriveNode::recv_callback(const can_frame& frame) {
 }
 
 void CustomODriveNode::subscriber_callback(const ControlMessage::SharedPtr msg) {
-  if (!enabled_.load()) {
+  if (!commands_allowed()) {
     return;
   }
   std::lock_guard<std::mutex> guard(ctrl_msg_mutex_);
@@ -277,9 +298,38 @@ void CustomODriveNode::subscriber_callback(const ControlMessage::SharedPtr msg) 
   sub_evt_.set();
 }
 
+void CustomODriveNode::drivestop_callback(const Bool::SharedPtr msg) {
+  // Contract: data=false → stop (IDLE + block); data=true → allow commands again.
+  if (msg->data) {
+    drive_allowed_.store(true);
+    RCLCPP_INFO(rclcpp::Node::get_logger(),
+                "/drivestop=true: drive allowed (set_enabled / control_message / non-IDLE states permitted)");
+    return;
+  }
+
+  const bool already_stopped = !drive_allowed_.exchange(false);
+  if (already_stopped) {
+    RCLCPP_DEBUG(rclcpp::Node::get_logger(), "/drivestop=false: already asserted");
+    return;
+  }
+
+  request_idle_on_can();
+  RCLCPP_WARN(rclcpp::Node::get_logger(),
+              "/drivestop=false: IDLE requested; all commands blocked until /drivestop=true");
+}
+
 void CustomODriveNode::service_callback(const std::shared_ptr<AxisState::Request> request,
                                         std::shared_ptr<AxisState::Response> response) {
   const bool requesting_idle = request->axis_requested_state == ODriveAxisState::AXIS_STATE_IDLE;
+
+  if (!drive_allowed_.load() && !requesting_idle) {
+    RCLCPP_WARN(rclcpp::Node::get_logger(),
+                "rejecting axis state %u: /drivestop is false (publish /drivestop data:=true first)",
+                request->axis_requested_state);
+    std::lock_guard<std::mutex> guard(ctrl_stat_mutex_);
+    fill_axis_state_response(response, false, false);
+    return;
+  }
 
   if (!enabled_.load() && !requesting_idle) {
     RCLCPP_WARN(rclcpp::Node::get_logger(),
@@ -330,6 +380,12 @@ void CustomODriveNode::service_clear_errors_callback(const std::shared_ptr<Empty
 void CustomODriveNode::service_set_enabled_callback(const std::shared_ptr<SetBool::Request> request,
                                                     std::shared_ptr<SetBool::Response> response) {
   if (request->data) {
+    if (!drive_allowed_.load()) {
+      response->success = false;
+      response->message = "cannot enable: /drivestop is false";
+      RCLCPP_WARN(rclcpp::Node::get_logger(), "set_enabled(true) rejected: /drivestop is false");
+      return;
+    }
     enabled_.store(true);
     response->success = true;
     response->message = "motor enabled";
@@ -338,11 +394,7 @@ void CustomODriveNode::service_set_enabled_callback(const std::shared_ptr<SetBoo
   }
 
   enabled_.store(false);
-  {
-    std::unique_lock<std::mutex> guard(axis_state_mutex_);
-    axis_state_ = ODriveAxisState::AXIS_STATE_IDLE;
-  }
-  srv_evt_.set();
+  request_idle_on_can();
   response->success = true;
   response->message = "motor disabled; IDLE requested";
   RCLCPP_WARN(rclcpp::Node::get_logger(), "motor disabled; control ignored until set_enabled(true)");
@@ -395,7 +447,7 @@ void CustomODriveNode::request_clear_errors_callback() {
 }
 
 void CustomODriveNode::ctrl_msg_callback() {
-  if (!enabled_.load()) {
+  if (!commands_allowed()) {
     return;
   }
 

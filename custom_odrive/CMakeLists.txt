@@ -8,6 +8,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
@@ -31,6 +32,7 @@ add_executable(custom_odrive_node
 
 ament_target_dependencies(custom_odrive_node
   rclcpp
+  std_msgs
   std_srvs
 )
 
