@@ -1,34 +1,18 @@
 # custom-ros-odrive
 
-Custom / modified ROS 2 packages based on the official ODrive Robotics [`ros_odrive`](https://github.com/odriverobotics/ros_odrive) project.
+ROS 2 packages for controlling ODrive motor controllers over CAN (SocketCAN).
 
-> **Not an official ODrive product.** This repository is independently maintained by UOW TronSoc and is not affiliated with, endorsed by, or sponsored by [ODrive Robotics](https://odriverobotics.com).
-
-## Attribution and license
-
-- **Upstream:** [odriverobotics/ros_odrive](https://github.com/odriverobotics/ros_odrive)
-- **Upstream license:** MIT — Copyright (c) 2023 ODrive Robotics
-- **This project:** MIT — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE)
+Based on [odriverobotics/ros_odrive](https://github.com/odriverobotics/ros_odrive). Not an official ODrive product. MIT license — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).
 
 ## Packages
 
-- **`custom_odrive`**: Standalone per-motor ROS 2 node for ODrive communication via CAN (epoll + SocketCAN, same transport pattern as upstream).
-- **`odrive_base`**: Shared epoll event loop and SocketCAN helpers (compiled into the node; not a separate ament package).
+- **`custom_odrive`** — per-motor ROS 2 node + commissioning / test scripts
+- **`odrive_base`** — SocketCAN + epoll helpers (compiled into the node)
 
-This repository does **not** include upstream `odrive_ros2_control` or the BotWheel explorer example.
-
-See [`custom_odrive/README.md`](custom_odrive/README.md) for topics, services, launch layout, and safety behavior. Parameter defaults live in [`custom_odrive/config/custom_odrive_defaults.yaml`](custom_odrive/config/custom_odrive_defaults.yaml).
-
-## Launch
-
-```bash
-ros2 launch custom_odrive example_launch.py        # one motor (odrive_axis0)
-ros2 launch custom_odrive example_multi_launch.py  # two motors
-```
+Interface details: [`custom_odrive/README.md`](custom_odrive/README.md).  
+Parameter defaults: [`custom_odrive/config/custom_odrive_defaults.yaml`](custom_odrive/config/custom_odrive_defaults.yaml).
 
 ## Build
-
-Ubuntu with ROS 2 Humble or newer, or use the Dev Containers in `.devcontainer/`:
 
 ```bash
 cd /path/to/custom-ros-odrive
@@ -36,11 +20,22 @@ colcon build --packages-select custom_odrive
 source install/setup.bash
 ```
 
-## Use
+Requires ROS 2 Humble or newer. Dev Containers are under `.devcontainer/`.
 
-Examples assume `example_launch.py` (`/odrive_axis0/...`) with `control_message_in_radians: true` (the package default).
+## Launch
 
-Useful enum values:
+Host must bring SocketCAN up first (e.g. `can0`).
+
+```bash
+ros2 launch custom_odrive example_launch.py         # one motor (wheel_bl, node_id 3)
+ros2 launch custom_odrive example_multi_launch.py   # four motors (wheel_fl/bl/br/fr)
+```
+
+Topics/services are under each Node’s namespace (e.g. `/wheel_fl/...`).
+
+## Runtime use
+
+Examples below use `/wheel_fl` from `example_multi_launch.py` with `control_message_in_radians: true`.
 
 | Name | Value |
 |------|-------|
@@ -49,122 +44,57 @@ Useful enum values:
 | ControlMode velocity | `2` |
 | InputMode vel ramp | `2` |
 
-### Check feedback
-
 ```bash
-ros2 topic echo /odrive_axis0/controller_status
-# controller_status.enabled reflects the enable latch
-```
+# Feedback
+ros2 topic echo /wheel_fl/controller_status
 
-### Enable / disable latch
+# Enable / disable
+ros2 service call /wheel_fl/set_enabled std_srvs/srv/SetBool "{data: true}"
+ros2 service call /wheel_fl/set_enabled std_srvs/srv/SetBool "{data: false}"
 
-```bash
-# Enable (allows control + closed-loop requests)
-ros2 service call /odrive_axis0/set_enabled std_srvs/srv/SetBool "{data: true}"
+# Closed-loop / idle
+ros2 service call /wheel_fl/request_axis_state custom_odrive/srv/AxisState "{axis_requested_state: 8}"
+ros2 service call /wheel_fl/request_axis_state custom_odrive/srv/AxisState "{axis_requested_state: 1}"
 
-# Disable (requests IDLE and ignores control_message)
-ros2 service call /odrive_axis0/set_enabled std_srvs/srv/SetBool "{data: false}"
-```
-
-### Global `/drivestop` (all motors)
-
-Every `custom_odrive_node` subscribes to absolute `/drivestop` (`std_msgs/msg/Bool`, reliable + transient local).
-
-**Local default: OFF** — until a `/drivestop` message arrives, this node does not assert stop and allows motion commands (subject to `set_enabled`).
-
-```bash
-# Assert stop: IDLE + block motion commands
-ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: true}"
-
-# Clear stop (drivestop off); does not auto-enable or enter closed loop
-ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: false}"
-```
-
-If the last stop/allow value must survive process restarts, keep a long-lived system latch
-publisher on `/drivestop` (same QoS) in shared rover infrastructure — not in this package.
-
-### Enter closed-loop control
-
-```bash
-ros2 service call /odrive_axis0/request_axis_state custom_odrive/srv/AxisState \
-  "{axis_requested_state: 8}"
-```
-
-Check `success` / `timed_out` in the response. Return to idle with `axis_requested_state: 1`.
-
-### Velocity control (rad/s)
-
-Spin at 2π rad/s (~1 turn/s):
-
-```bash
-ros2 topic pub -r 10 /odrive_axis0/control_message custom_odrive/msg/ControlMessage \
+# Velocity (rad/s) — publish continuously; each message feeds the ODrive watchdog
+ros2 topic pub -r 10 /wheel_fl/control_message custom_odrive/msg/ControlMessage \
   "{control_mode: 2, input_mode: 2, input_pos: 0.0, input_vel: 6.283185, input_torque: 0.0}"
 ```
 
-Stop (0 rad/s), still in velocity mode:
+Global stop (all motors):
 
 ```bash
-ros2 topic pub -r 10 /odrive_axis0/control_message custom_odrive/msg/ControlMessage \
-  "{control_mode: 2, input_mode: 2, input_pos: 0.0, input_vel: 0.0, input_torque: 0.0}"
+ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: true}"   # IDLE + block motion
+ros2 topic pub --once /drivestop std_msgs/msg/Bool "{data: false}"  # allow again (does not auto-enable)
 ```
 
-Press `Ctrl+C` to stop the publisher when finished.
-
-### Typical sequence
+Helper test (streams setpoints and confirms `axis_state == 8`):
 
 ```bash
-ros2 launch custom_odrive example_launch.py
-# (other terminal)
-ros2 service call /odrive_axis0/set_enabled std_srvs/srv/SetBool "{data: true}"
-ros2 service call /odrive_axis0/request_axis_state custom_odrive/srv/AxisState "{axis_requested_state: 8}"
-ros2 topic pub -r 10 /odrive_axis0/control_message custom_odrive/msg/ControlMessage \
-  "{control_mode: 2, input_mode: 2, input_pos: 0.0, input_vel: 6.283185, input_torque: 0.0}"
-# later: set input_vel to 0.0, then request IDLE (1) and/or set_enabled false
+ros2 run custom_odrive velocity_ramp_test -- --ns /wheel_fl --target-vel 6.28
 ```
 
-## Watchdog / publish rate
+### Watchdog
 
-The node sends CAN traffic only in response to input — there is **no periodic keepalive**. A
-setpoint frame (which feeds the ODrive axis watchdog) is transmitted **once per
-`control_message` you publish**. Staying armed in closed-loop therefore depends on your
-publish rate:
+The node does not send a periodic keepalive. Publish `control_message` at roughly **5–10×** the firmware `watchdog_timeout` (e.g. ≥5–10 Hz for a 1 s watchdog), or the drive returns to IDLE when setpoints stop.
 
-- Publish `control_message` at roughly **5–10× the watchdog rate**. For a 1 s watchdog, that
-  means **≥ 5–10 Hz**, so a few dropped or late messages don't trip it.
-- If the publisher is remote (e.g. over wifi), add more margin or keep the control loop
-  on-board.
-- The `control_message` subscriber is `KeepLast(1)` (reliable by default) — the publisher's
-  QoS must be compatible or messages won't be delivered at all.
-- Stopping the publisher, or calling `set_enabled` with `data: false`, stops setpoints, so the
-  watchdog trips ~1 timeout later and the motor disarms to idle. This is the intended safety
-  behavior — the node does not hold a setpoint on your behalf.
+## Commissioning
 
-Enable the CAN watchdog in ODrive firmware (`<axis>.config.enable_watchdog` and
-`watchdog_timeout`) so comms loss faults the motor to idle.
-
-## Commissioning (config / calibrate / save)
-
-Apply a per-motor config over SocketCAN via Fibre (odrivetool-over-CAN), without USB:
+Apply firmware config over SocketCAN (Fibre / odrivetool-over-CAN), optionally calibrate and save:
 
 ```bash
-python3 -m pip install --upgrade odrive   # >=0.6.11.post0; FW on drive >=0.6.11
+python3 -m pip install --upgrade odrive   # >= 0.6.11.post0; drive FW >= 0.6.11
 
 ros2 run custom_odrive commission -- \
-  --can can_core \
-  --config /path/to/motor_config.py \
-  --ns /odrive_axis0 \
+  --can can0 \
+  --config /path/to/wheel_fl_motor_config.py \
+  --ns /wheel_fl \
   --calibrate \
   --save
 ```
 
-`SERIAL_NUMBER` must live in the config file (see
-[`custom_odrive/config/example_motor_config.py`](custom_odrive/config/example_motor_config.py)).
-Use `--ns` whenever that motor’s `custom_odrive_node` is running so it is parked
-first. `--calibrate` asks you to confirm the wheel is off the ground. Details:
-[`custom_odrive/README.md`](custom_odrive/README.md#commissioning-config--calibrate--save-over-can).
+Config files live under [`custom_odrive/config/`](custom_odrive/config/) (`SERIAL_NUMBER` required in each file). See [`custom_odrive/README.md`](custom_odrive/README.md#commissioning).
 
-## Compatible devices (upstream)
+## Compatible devices
 
-- ODrive Pro, ODrive S1, ODrive Micro (not ODrive 3.x)
-
-For ODrive firmware / cyclic message setup, see the [ROS CAN Package Guide](https://docs.odriverobotics.com/v/latest/guides/ros-package.html).
+ODrive Pro, S1, Micro (not ODrive 3.x). Firmware cyclic-message setup: [ROS CAN Package Guide](https://docs.odriverobotics.com/v/latest/guides/ros-package.html).
