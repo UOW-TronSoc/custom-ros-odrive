@@ -32,6 +32,8 @@ Build / walkthrough: [repository README](../README.md).
 
 Defaults: [`config/custom_odrive_defaults.yaml`](config/custom_odrive_defaults.yaml).
 
+`axis_idle_on_startup` (default `true`) sends **ClearErrors then IDLE** on the CAN bus (same ClearErrors as the `clear_errors` service). `axis_idle_on_shutdown` sends **IDLE only**. Latched faults are cleared on relaunch without a manual `clear_errors` call.
+
 Required per Node (not in the defaults file):
 
 | Field | Where |

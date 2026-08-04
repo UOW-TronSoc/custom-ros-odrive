@@ -78,6 +78,8 @@ ros2 run custom_odrive velocity_ramp_test -- --ns /wheel_fl --target-vel 6.28
 
 The node does not send a periodic keepalive. Publish `control_message` at roughly **5–10×** the firmware `watchdog_timeout` (e.g. ≥5–10 Hz for a 1 s watchdog), or the drive returns to IDLE when setpoints stop.
 
+On node startup (when `axis_idle_on_startup` is true), the node sends **ClearErrors then IDLE**. On shutdown it sends IDLE only, so latched faults are cleared on the next relaunch.
+
 ## Commissioning
 
 Apply firmware config over SocketCAN (Fibre / odrivetool-over-CAN), optionally calibrate and save:

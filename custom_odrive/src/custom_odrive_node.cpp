@@ -115,6 +115,14 @@ CustomODriveNode::CustomODriveNode(const std::string& node_name) : rclcpp::Node(
       srv_cb_group_);
 }
 
+void CustomODriveNode::send_clear_errors() {
+  struct can_frame frame = {};
+  frame.can_id = node_id_ << 5 | CmdId::kClearErrors;
+  write_le<uint8_t>(0, frame.data);  // Identify=0 (no LED blink)
+  frame.can_dlc = 1;
+  can_intf_.send_can_frame(frame);
+}
+
 void CustomODriveNode::send_axis_idle() {
   // Direct TX (startup / shutdown paths already on a context that can write).
   struct can_frame frame = {};
@@ -195,7 +203,8 @@ bool CustomODriveNode::init(EpollEventLoop* event_loop) {
               "listening on /drivestop (true=stop, false=allow); local default OFF (allow)");
 
   if (axis_idle_on_startup_) {
-    RCLCPP_INFO(rclcpp::Node::get_logger(), "requesting IDLE on startup");
+    RCLCPP_INFO(rclcpp::Node::get_logger(), "requesting ClearErrors + IDLE on startup");
+    send_clear_errors();
     send_axis_idle();
   }
 
@@ -475,10 +484,7 @@ void CustomODriveNode::request_state_callback() {
 
   // Non-zero state requests clear errors first (axis_state_ 0 is unused as a request).
   if (axis_state != 0) {
-    frame.can_id = node_id_ << 5 | CmdId::kClearErrors;
-    write_le<uint8_t>(0, frame.data);
-    frame.can_dlc = 1;
-    can_intf_.send_can_frame(frame);
+    send_clear_errors();
   }
 
   frame.can_id = node_id_ << 5 | CmdId::kSetAxisState;
@@ -488,11 +494,7 @@ void CustomODriveNode::request_state_callback() {
 }
 
 void CustomODriveNode::request_clear_errors_callback() {
-  struct can_frame frame = {};
-  frame.can_id = node_id_ << 5 | CmdId::kClearErrors;
-  write_le<uint8_t>(0, frame.data);  // Identify=0 (no LED blink)
-  frame.can_dlc = 1;
-  can_intf_.send_can_frame(frame);
+  send_clear_errors();
 }
 
 void CustomODriveNode::ctrl_msg_callback() {

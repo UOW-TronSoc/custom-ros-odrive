@@ -85,6 +85,7 @@ private:
   void ctrl_msg_callback();            // Set_Controller_Mode (if changed) + setpoint
 
   // --- Helpers ---
+  void send_clear_errors();            // Immediate ClearErrors CAN frame on this thread
   void send_axis_idle();               // Immediate Set_Axis_State IDLE on this thread
   void request_idle_on_can();          // Queue IDLE via srv_evt_ (cross-thread safe)
   bool commands_allowed() const;       // enabled_ && !drivestop_active_
