@@ -397,20 +397,19 @@ void CustomODriveNode::service_callback(const std::shared_ptr<AxisState::Request
   }
   srv_evt_.set();
 
-  // Block until procedure completes or timeout. Upstream always waits ≥1s.
-  // CLOSED_LOOP is treated as "complete" after 1s even if still BUSY briefly —
-  // timed_out only happens for long procedures (e.g. calibration).
+  // Block until the heartbeats show the requested axis state has actually been reached
+  // (and the procedure is no longer BUSY), or until the timeout expires. We still
+  // preserve the minimum 1s wait to avoid reporting success on an immediate reply.
   std::unique_lock<std::mutex> guard(ctrl_stat_mutex_);
   auto call_time = std::chrono::steady_clock::now();
   const auto timeout = std::chrono::duration<double>(request_axis_state_timeout_s_);
 
   const bool completed = fresh_heartbeat_.wait_for(guard, timeout, [this, &call_time, &request]() {
-    bool is_busy = this->ctrl_stat_.procedure_result == ODriveProcedureResult::PROCEDURE_RESULT_BUSY;
-    bool requested_closed_loop =
-        request->axis_requested_state == ODriveAxisState::AXIS_STATE_CLOSED_LOOP_CONTROL;
-    bool minimum_time_passed = (std::chrono::steady_clock::now() - call_time >= std::chrono::seconds(1));
-    bool complete = (requested_closed_loop || !is_busy) && minimum_time_passed;
-    return complete;
+    const bool state_matches = this->ctrl_stat_.axis_state == request->axis_requested_state;
+    const bool is_busy = this->ctrl_stat_.procedure_result == ODriveProcedureResult::PROCEDURE_RESULT_BUSY;
+    const bool minimum_time_passed = (std::chrono::steady_clock::now() - call_time >= std::chrono::seconds(1));
+    const bool procedure_finished = !is_busy;
+    return state_matches && minimum_time_passed && procedure_finished;
   });
 
   if (!completed) {
