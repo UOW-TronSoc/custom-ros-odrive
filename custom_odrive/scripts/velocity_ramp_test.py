@@ -10,9 +10,9 @@ custom_odrive_node does not send a periodic keepalive. Each control_message
 becomes one CAN setpoint frame, which resets the ODrive watchdog. If this
 script stops publishing (or publishes too slowly), the drive disarms to IDLE.
 
-Also: request_axis_state may report success=true for CLOSED_LOOP after ~1s even
-when the axis never left IDLE (e.g. latched WATCHDOG / NOT_CALIBRATED). Always
-confirm controller_status.axis_state == 8 before trusting motion.
+The state service waits for a fresh heartbeat confirming CLOSED_LOOP. This
+script checks controller_status again before commanding motion as an additional
+end-to-end guard.
 
 Examples (with example_multi_launch.py running):
   ros2 run custom_odrive velocity_ramp_test -- --ns wheel_fr
@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         if resp is None:
             return 1
 
-        # Do NOT trust success alone — CLOSED_LOOP returns success after ~1s even if still IDLE
+        # Confirm the status topic independently before commanding motion.
         if not node.wait_for_axis_state(AXIS_STATE_CLOSED_LOOP, timeout_s=3.0):
             node.get_logger().error(
                 f"NOT in CLOSED_LOOP (axis_state={node._axis_state}, errors=0x{node._active_errors:08X}). "

@@ -24,6 +24,7 @@
 #include "byte_swap.hpp"
 #include <sys/eventfd.h>
 #include <chrono>
+#include <cmath>
 
 namespace {
 constexpr float kTwoPi = 6.28318530717958647692F;
@@ -166,12 +167,10 @@ bool CustomODriveNode::init(EpollEventLoop* event_loop) {
   enabled_.store(rclcpp::Node::get_parameter("start_enabled").as_bool());
   std::string interface = rclcpp::Node::get_parameter("interface").as_string();
 
-  // Service always waits at least 1s (upstream behavior); clamp timeout accordingly.
-  if (request_axis_state_timeout_s_ < 1.0) {
-    RCLCPP_WARN(rclcpp::Node::get_logger(),
-                "request_axis_state_timeout_s (%.3f) is below the 1s minimum wait; clamping to 1.0",
-                request_axis_state_timeout_s_);
-    request_axis_state_timeout_s_ = 1.0;
+  if (!std::isfinite(request_axis_state_timeout_s_) || request_axis_state_timeout_s_ <= 0.0) {
+    RCLCPP_ERROR(rclcpp::Node::get_logger(),
+                 "request_axis_state_timeout_s must be finite and greater than zero");
+    return false;
   }
 
   if (!can_intf_.init(interface, event_loop, std::bind(&CustomODriveNode::recv_callback, this, _1))) {
@@ -254,6 +253,7 @@ void CustomODriveNode::recv_callback(const can_frame& frame) {
       ctrl_stat_.axis_state = read_le<uint8_t>(frame.data + 4);
       ctrl_stat_.procedure_result = read_le<uint8_t>(frame.data + 5);
       ctrl_stat_.trajectory_done_flag = read_le<bool>(frame.data + 6);
+      ++heartbeat_sequence_;
       ctrl_pub_flag_ |= 0b0001;
       // Wake request_axis_state waiters so they can re-check procedure_result.
       fresh_heartbeat_.notify_one();
@@ -397,19 +397,21 @@ void CustomODriveNode::service_callback(const std::shared_ptr<AxisState::Request
   }
   srv_evt_.set();
 
-  // Block until the heartbeats show the requested axis state has actually been reached
-  // (and the procedure is no longer BUSY), or until the timeout expires. We still
-  // preserve the minimum 1s wait to avoid reporting success on an immediate reply.
+  // Return on the first fresh heartbeat that confirms the requested state.
+  // CLOSED_LOOP legitimately remains BUSY because it is an ongoing procedure.
   std::unique_lock<std::mutex> guard(ctrl_stat_mutex_);
-  auto call_time = std::chrono::steady_clock::now();
+  const uint64_t initial_heartbeat_sequence = heartbeat_sequence_;
   const auto timeout = std::chrono::duration<double>(request_axis_state_timeout_s_);
 
-  const bool completed = fresh_heartbeat_.wait_for(guard, timeout, [this, &call_time, &request]() {
+  const bool completed = fresh_heartbeat_.wait_for(guard, timeout, [this, initial_heartbeat_sequence, &request]() {
+    const bool heartbeat_is_fresh = heartbeat_sequence_ > initial_heartbeat_sequence;
     const bool state_matches = this->ctrl_stat_.axis_state == request->axis_requested_state;
     const bool is_busy = this->ctrl_stat_.procedure_result == ODriveProcedureResult::PROCEDURE_RESULT_BUSY;
-    const bool minimum_time_passed = (std::chrono::steady_clock::now() - call_time >= std::chrono::seconds(1));
-    const bool procedure_finished = !is_busy;
-    return state_matches && minimum_time_passed && procedure_finished;
+    const bool requested_closed_loop =
+        request->axis_requested_state == ODriveAxisState::AXIS_STATE_CLOSED_LOOP_CONTROL;
+    // CLOSED_LOOP is an ongoing procedure and legitimately remains BUSY.
+    const bool procedure_finished = requested_closed_loop || !is_busy;
+    return heartbeat_is_fresh && state_matches && procedure_finished;
   });
 
   if (!completed) {

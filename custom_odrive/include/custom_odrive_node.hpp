@@ -104,8 +104,8 @@ private:
   SocketCanIntf can_intf_ = SocketCanIntf();
 
   // Separate groups so control_message can be processed while request_axis_state
-  // blocks (>=1s). With a single MutuallyExclusive group + SingleThreadedExecutor,
-  // setpoint forwarding stops during that wait and a 1s watchdog disarms the axis.
+  // waits for confirmation. Otherwise setpoint forwarding could stop during a
+  // long transition and allow the ODrive watchdog to disarm the axis.
   rclcpp::CallbackGroup::SharedPtr sub_cb_group_;
   rclcpp::CallbackGroup::SharedPtr srv_cb_group_;
 
@@ -113,6 +113,7 @@ private:
   // before publishing (see recv_callback).
   short int ctrl_pub_flag_ = 0;
   std::mutex ctrl_stat_mutex_;
+  uint64_t heartbeat_sequence_{0};
   ControllerStatus ctrl_stat_ = ControllerStatus();
   rclcpp::Publisher<ControllerStatus>::SharedPtr ctrl_publisher_;
 

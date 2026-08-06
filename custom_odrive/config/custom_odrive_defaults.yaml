@@ -19,5 +19,5 @@
     axis_idle_on_startup: true           # ClearErrors + IDLE on node startup (safe known state)
     control_message_in_radians: true     # pos/vel as rad (and rad/s), not turns
     invert_direction: false              # flip command and feedback sign
-    request_axis_state_timeout_s: 5.0    # max wait for request_axis_state (s); min effective 1.0
+    request_axis_state_timeout_s: 5.0    # max wait for a confirming heartbeat (s)
     start_enabled: true                  # initial enable-latch state
